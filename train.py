@@ -29,6 +29,9 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 
+#to log the data
+import json
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -100,6 +103,20 @@ else:
     ddp_world_size = 1
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
+
+# Save the config to a JSON file
+run_id = f"baseline_run_{int(time.time())}"  # Unique ID per run, e.g., "baseline_run_1712081234"
+log_dir = os.path.join(out_dir, "logs")
+if master_process:
+    os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"{run_id}.json")
+log_data = {
+    "iterations": [],
+    "train_loss": [],
+    "val_loss": [],
+    "times": [],
+    "samples": None  # Will populate this later
+}
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -284,6 +301,8 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+        #Add validation loss logging
+        log_data["val_loss"].append({"iteration": iter_num, "value": losses['val'].item()})
     if iter_num == 0 and eval_only:
         break
 
@@ -325,12 +344,32 @@ while True:
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        #Add training loss and runtime logging
+        log_data["iterations"].append(iter_num)
+        log_data["train_loss"].append(lossf)
+        log_data["times"].append(dt)
     iter_num += 1
     local_iter_num += 1
 
     # termination conditions
     if iter_num > max_iters:
         break
+
+# Add sample generation and log saving
+if master_process:
+    model.eval()
+    with torch.no_grad():
+        samples = []
+        # Example prompt (adjust based on your dataset/tokenizer)
+        prompt = torch.tensor([1, 2, 3], dtype=torch.long, device=device).unsqueeze(0)
+        for _ in range(5):  # Generate 5 samples
+            out = raw_model.generate(prompt, max_new_tokens=50, temperature=0.7)
+            samples.append(out[0].cpu().tolist())
+        log_data["samples"] = samples
+    model.train()
+    with open(log_file, "w") as f:
+        json.dump(log_data, f)
+        print(f"Saved log data to {log_file}")
 
 if ddp:
     destroy_process_group()
