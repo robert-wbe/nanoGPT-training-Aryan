@@ -3,18 +3,22 @@ Sample from a trained model
 """
 import os
 import pickle
+import time
 from contextlib import nullcontext
 import torch
 import tiktoken
 from model import GPTConfig, GPT
 
+#for json saving
+import json
+
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out' # ignored if init_from is not 'resume'
 start = "\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-num_samples = 10 # number of samples to draw
-max_new_tokens = 500 # number of tokens generated in each sample
-temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+num_samples = 5 # number of samples to draw (Aryan: matches the train.py)
+max_new_tokens = 50 # number of tokens generated in each sample (Aryan: matches the train.py)
+temperature = 0.7 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
 seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
@@ -83,7 +87,19 @@ x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 # run generation
 with torch.no_grad():
     with ctx:
+        samples = []
         for k in range(num_samples):
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
-            print(decode(y[0].tolist()))
+            sample_text = decode(y[0].tolist())
+            print(sample_text)
             print('---------------')
+
+            samples.append(y[0].cpu().tolist())  # Save token IDs
+
+        #saving the samples to a json file
+        sample_dir = os.path.join(out_dir, "logs")
+        os.makedirs(sample_dir, exist_ok=True)
+        sample_file = os.path.join(sample_dir, f"samples_{int(time.time())}.json")
+        with open(sample_file, "w") as f:
+            json.dump({"samples": samples}, f)
+        print(f"qSaved samples to {sample_file}")

@@ -115,7 +115,6 @@ log_data = {
     "train_loss": [],
     "val_loss": [],
     "times": [],
-    "samples": None  # Will populate this later
 }
 
 if master_process:
@@ -357,16 +356,6 @@ while True:
 
 # Add sample generation and log saving
 if master_process:
-    model.eval()
-    with torch.no_grad():
-        samples = []
-        # Example prompt (adjust based on your dataset/tokenizer)
-        prompt = torch.tensor([1, 2, 3], dtype=torch.long, device=device).unsqueeze(0)
-        for _ in range(5):  # Generate 5 samples
-            out = raw_model.generate(prompt, max_new_tokens=50, temperature=0.7)
-            samples.append(out[0].cpu().tolist())
-        log_data["samples"] = samples
-    model.train()
     with open(log_file, "w") as f:
         json.dump(log_data, f)
         print(f"Saved log data to {log_file}")
