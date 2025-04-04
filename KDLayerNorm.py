@@ -125,3 +125,93 @@ class KDLayerNorm(nn.Module):
         if self.bias is not None:
             x = x + self.bias
         return x
+    
+class KernelDensityEstimatorSmpl:
+    """Implements Sampling Kernel Density Estimation (Smpl-KDE) with a given kernel"""
+
+    def __init__(self,
+                 data: torch.Tensor,
+                 kernel: Type[DensityKernel] = GaussianKernel,
+                 bandwidth: ArrayLike = None,
+                 bandwidth_heuristic: Type[BandwidthHeuristic] = BandwidthHeuristic.silverman,
+                 sample_size: int = 32,
+                 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+                 ):
+        self.data = data
+        self.kernel = kernel
+        self.sample_size = sample_size
+        self.device = device
+        if data is not None:
+            self.bandwidth = bandwidth if bandwidth is not None else bandwidth_heuristic(data)
+    
+    def estimate(self, x: torch.Tensor) -> torch.Tensor:
+        """Estimate the density at points x using the given kernel"""
+        scaled_x = (x[:,np.newaxis] - self.data[np.newaxis,:]) / self.bandwidth
+        return torch.mean(self.kernel.evaluate(scaled_x), dim=1) / self.bandwidth
+    
+    def cdf(self, x: torch.Tensor) -> torch.Tensor:
+        """Estimate the CDF at points x using the given kernel"""
+        scaled_x = (x[:,np.newaxis] - self.data[np.newaxis,:]) / self.bandwidth
+        return torch.mean(self.kernel.cdf(scaled_x), dim=1)
+    
+    def normalize(self) -> torch.Tensor:
+        """Normalize the data using the estimated CDF"""
+        cdf = self.cdf(self.data)
+        return self.kernel.ppf(cdf)
+    
+    def normalize_data(self, data: torch.Tensor, bandwidth: ArrayLike = None, bandwidth_heuristic: Type[BandwidthHeuristic] = BandwidthHeuristic.silverman) -> torch.Tensor:
+        """Normalize the given data using the estimated CDF"""
+        self.bandwidth = bandwidth if bandwidth is not None else bandwidth_heuristic(data)
+        self.data = data
+        cdf = self.cdf(data)
+        return self.kernel.ppf(cdf)
+    
+    def cdf2d(self, x: torch.Tensor) -> torch.Tensor:
+        """Estimate the CDF at points x using the given kernel"""
+        scaled_x = (x[:,:,None] - self.data[:,None,:]) / self.bandwidth[:,None,None]
+        return torch.mean(self.kernel.cdf(scaled_x), dim=2)
+    
+    def normalize_data2d(self, data: torch.Tensor, bandwidth: ArrayLike = None, bandwidth_heuristic: Type[BandwidthHeuristic] = BandwidthHeuristic.silverman2d) -> torch.Tensor:
+        """Normalize the given data using the estimated CDF"""
+        data_sample = data[:, torch.randint(data.shape[-1], (self.sample_size,))]
+        self.bandwidth = bandwidth if bandwidth is not None else bandwidth_heuristic(data_sample)
+        self.data = data_sample
+        cdf = self.cdf2d(data)
+        return self.kernel.ppf(cdf)
+
+class KDLayerNormSmpl(nn.Module):
+    """
+    Sampling Kernel Density Layer Normalization\n
+    Applies Sampling Kernel Density Normalization over a mini-batch of inputs
+    Statistics are computed over the last `ndim` dimensions. 
+    """
+    
+    def __init__(self,
+                 normalized_size: ArrayLike,
+                 bias: bool = True,
+                 kernel: Type[DensityKernel] = GaussianKernel,
+                 bandwidth: ArrayLike = None,
+                 bandwidth_heuristic: Type[BandwidthHeuristic] = BandwidthHeuristic.silverman2d,
+                 sample_size: int = 32,
+                 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+                 ):
+        super(KDLayerNormSmpl, self).__init__()
+        self.kde = KernelDensityEstimatorSmpl(None, kernel, bandwidth, bandwidth_heuristic, sample_size, device)
+        self.explicit_bandwidth = bandwidth
+        self.bandwidth_heuristic = bandwidth_heuristic
+        self.norm_size = tuple(normalized_size) if type(normalized_size) is not int else (normalized_size,)
+        self.ndim = len(self.norm_size)
+        self.weight = nn.Parameter(torch.ones(normalized_size))
+        self.bias = nn.Parameter(torch.zeros(normalized_size)) if bias else None
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply Sampling Kernel Density Normalization to the input tensor"""
+        self.extra_size = x.shape[:-self.ndim]
+        slice_shape = [prod(self.extra_size), prod(self.norm_size)]
+        x = x.reshape(slice_shape)
+        x = self.kde.normalize_data2d(x, self.explicit_bandwidth, self.bandwidth_heuristic)
+        x = x.reshape(self.extra_size + self.norm_size)
+        x = x * self.weight
+        if self.bias is not None:
+            x = x + self.bias
+        return x
