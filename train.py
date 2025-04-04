@@ -21,6 +21,7 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+import gc
 
 import numpy as np
 import torch
@@ -193,7 +194,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -245,6 +246,19 @@ def get_lr(it):
 if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+
+
+def list_tensors():
+    """Lists all tensors currently in memory and their sizes"""
+    tensors = []
+    for obj in gc.get_objects():  # Iterate through all objects in memory
+        try:
+            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                tensors.append((type(obj), obj.shape, obj.device, obj.dtype))
+        except:
+            pass
+    for t in tensors:
+        print(f"Type: {t[0]}, Shape: {t[1]}, Device: {t[2]}, Dtype: {t[3]}")
 
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
@@ -298,6 +312,8 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             logits, loss = model(X, Y)
+            #print("AFTER MODEL PASS", torch.cuda.memory_summary())
+            #torch.cuda.memory_summary()
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
@@ -312,6 +328,8 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+    #print("AFTER GRAD UPDATE", torch.cuda.memory_summary())
+    #torch.cuda.memory_summary()
 
     # timing and logging
     t1 = time.time()
