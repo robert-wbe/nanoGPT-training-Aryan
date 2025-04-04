@@ -9,12 +9,27 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import gc
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from KDLayerNorm import KDLayerNorm # <- our LayerNorm to test
+#from KDLayerNormSpl import KDLayerNormSpl2 as KDLayerNorm
+#from KDLayerNormLip import KDLayerNormSplLip as KDLayerNorm
+
+def list_tensors():
+    """Lists all tensors currently in memory and their sizes"""
+    tensors = []
+    for obj in gc.get_objects():  # Iterate through all objects in memory
+        try:
+            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                tensors.append((type(obj), obj.shape, obj.device, obj.dtype))
+        except:
+            pass
+    for t in tensors:
+        print(f"Type: {t[0]}, Shape: {t[1]}, Device: {t[2]}, Dtype: {t[3]}")
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -99,12 +114,12 @@ class Block(nn.Module):
         #        interchange here
         #           | | | | |
         #           v v v v v
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = KDLayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         #        interchange here
         #           | | | | |
         #           v v v v v
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = KDLayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -138,7 +153,7 @@ class GPT(nn.Module):
             #   interchange here
             #      | | | | |
             #      v v v v v
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ln_f = KDLayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
@@ -187,9 +202,16 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
+        for i, block in enumerate(self.transformer.h):
             x = block(x)
+            if self.training:
+                torch._C._cuda_memoryStats(0)
+                #torch.cuda.empty_cache()
+                #gc.collect()
+                #print(f"After block {i}: {summary}")
         x = self.transformer.ln_f(x)
+        #if self.training: print(f"After final layernorm {i}: {torch.cuda.memory_summary()}")
+        #torch.cuda.memory_summary()
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
@@ -200,6 +222,7 @@ class GPT(nn.Module):
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
+        #if self.training: print(f"Afterlogits/loss calculation: {torch.cuda.memory_summary()}")
         return logits, loss
 
     def crop_block_size(self, block_size):
