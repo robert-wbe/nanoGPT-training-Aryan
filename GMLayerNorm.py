@@ -21,18 +21,20 @@ class GMLayerNorm(nn.Module):
         self.ndim = len(self.norm_size)
         self.weight = nn.Parameter(torch.ones(normalized_size))
         self.bias = nn.Parameter(torch.zeros(normalized_size)) if bias else None
+        self.eps = torch.finfo(torch.float16).eps
     
     def normalize2d(self, x: torch.Tensor) -> torch.Tensor:
         mean, std = x.mean(dim=-1), x.std(dim=-1)
         start_mean = torch.stack((mean-1.2*std, mean, mean+1.2*std), dim=1)
-        z: torch.Tensor = self.normal_dist.log_prob((x[:, :, None] - start_mean[:, None, :])/std[:, None, None]*3).exp() / std[:, None, None]
-        z /= z.sum(dim=-1, keepdim=True)
+        z: torch.Tensor = self.normal_dist.log_prob((x[:, :, None] - start_mean[:, None, :])/std[:, None, None]*3) - torch.log(std)[:, None, None]
+        z = torch.exp(z - torch.logsumexp(z, dim=-1, keepdim=True))
         n_k: torch.Tensor = z.sum(dim=-2)
         gmm_means: torch.Tensor = torch.sum(x[:, :, None] * z, dim=-2) / n_k
         gmm_std: torch.Tensor = torch.sqrt(torch.sum(z * torch.square(x[:, :, None]), dim=-2) / n_k - torch.square(gmm_means))
         gmm_p: torch.Tensor = n_k / z.shape[-2]
         cdf: torch.Tensor = torch.sum(gmm_p[:, None, :] * self.normal_dist.cdf((x[:, :, None] - gmm_means[:, None, :])/gmm_std[:, None, :]), dim=-1)
-        x = self.normal_dist.icdf(cdf)
+        clamped = torch.clamp(cdf, min=self.eps, max=1.0-self.eps)
+        x = self.normal_dist.icdf(clamped)
         return x
 
 
