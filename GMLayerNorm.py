@@ -25,7 +25,7 @@ class GMLayerNorm(nn.Module):
     
     def normalize2d(self, x: torch.Tensor) -> torch.Tensor:
         mean, std = x.mean(dim=-1), x.std(dim=-1)
-        start_mean = torch.stack((mean-1.2*std, mean, mean+1.2*std), dim=1)
+        start_mean = torch.stack((mean-0.882*std, mean, mean+0.882*std), dim=1)
         z: torch.Tensor = self.normal_dist.log_prob((x[:, :, None] - start_mean[:, None, :])/std[:, None, None]*3) - torch.log(std)[:, None, None]
         z = torch.exp(z - torch.logsumexp(z, dim=-1, keepdim=True))
         n_k: torch.Tensor = z.sum(dim=-2)
