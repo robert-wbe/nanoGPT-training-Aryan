@@ -55,7 +55,8 @@ class GaussianKernel(DensityKernel):
     
     @staticmethod
     def ppf(x: torch.Tensor) -> torch.Tensor:
-        return torch.erfinv(2*x - 1) * np.sqrt(2)
+        inp = torch.clamp(2*x - 1, min=torch.finfo(torch.float16).tiny, max=1.0-torch.finfo(torch.float16).eps)
+        return torch.erfinv(inp) * np.sqrt(2)
 
 class KernelDensityEstimator:
     """Implements Kernel Density Estimation (KDE) with a given kernel"""
@@ -191,7 +192,7 @@ class KernelDensityEstimatorSmpl:
     
     def normalize_data2d(self, data: torch.Tensor, bandwidth: ArrayLike = None, bandwidth_heuristic: Type[BandwidthHeuristic] = BandwidthHeuristic.silverman2d) -> torch.Tensor:
         """Normalize the given data using the estimated CDF"""
-        data_sample = data[:, torch.randint(data.shape[-1], (self.sample_size,))]
+        data_sample = data[:, torch.randint(data.shape[-1], (self.sample_size,), device=self.device)]
         self.bandwidth = bandwidth if bandwidth is not None else bandwidth_heuristic(data_sample)
         self.data = data_sample
         cdf = self.cdf2d(data)
