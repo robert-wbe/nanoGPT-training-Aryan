@@ -15,9 +15,11 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from KDLayerNorm import KDLayerNorm # <- our LayerNorm to test
-#from KDLayerNormSpl import KDLayerNormSpl2 as KDLayerNorm
-#from KDLayerNormLip import KDLayerNormSplLip as KDLayerNorm
+#from KDLayerNorm import KDLayerNorm as CustomlayerNorm # <- our LayerNorm to test
+#from KDLayerNormSpl import KDLayerNormSpl2 as CustomLayerNorm
+#from KDLayerNormLip import KDLayerNormSplLip as CustomLayerNorm
+from KDLayerNorm import KDLayerNormSmpl as CustomLayerNorm
+#from GMLayerNorm import GMLayerNorm as CustomLayerNorm
 
 def list_tensors():
     """Lists all tensors currently in memory and their sizes"""
@@ -114,12 +116,12 @@ class Block(nn.Module):
         #        interchange here
         #           | | | | |
         #           v v v v v
-        self.ln_1 = KDLayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = CustomLayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         #        interchange here
         #           | | | | |
         #           v v v v v
-        self.ln_2 = KDLayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = CustomLayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -153,7 +155,7 @@ class GPT(nn.Module):
             #   interchange here
             #      | | | | |
             #      v v v v v
-            ln_f = KDLayerNorm(config.n_embd, bias=config.bias),
+            ln_f = CustomLayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
@@ -204,14 +206,7 @@ class GPT(nn.Module):
         x = self.transformer.drop(tok_emb + pos_emb)
         for i, block in enumerate(self.transformer.h):
             x = block(x)
-            if self.training:
-                torch._C._cuda_memoryStats(0)
-                #torch.cuda.empty_cache()
-                #gc.collect()
-                #print(f"After block {i}: {summary}")
         x = self.transformer.ln_f(x)
-        #if self.training: print(f"After final layernorm {i}: {torch.cuda.memory_summary()}")
-        #torch.cuda.memory_summary()
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
